@@ -15,6 +15,21 @@ const App: React.FC = () => {
   const [pageResultsRevealed, setPageResultsRevealed] = useState<Record<number, boolean>>({});
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Favorites State with persistence
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('exam_favorites');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Failed to load favorites", e);
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('exam_favorites', JSON.stringify(favorites));
+  }, [favorites]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -68,12 +83,9 @@ const App: React.FC = () => {
     );
   }, [data, searchQuery]);
 
-  // Reset page and reveal state when search query changes
+  // Reset page logic when search changes
   useEffect(() => {
     setCurrentPage(1);
-    // Optional: Reset revealed state when search changes? 
-    // Usually better to keep it if we want to retain state, but if the list changes completely,
-    // page-based reveal might be confusing. Let's reset for clarity.
     setPageResultsRevealed({});
   }, [searchQuery]);
 
@@ -86,7 +98,7 @@ const App: React.FC = () => {
     return filteredData.slice(start, end);
   }, [currentPage, filteredData]);
 
-  // Calculations for sticky header (Global progress)
+  // Progress logic
   const totalGlobalQuestions = data.length;
   const totalAnswered = Object.keys(userAnswers).length;
   const progress = totalGlobalQuestions > 0 ? Math.min((totalAnswered / totalGlobalQuestions) * 100, 100) : 0;
@@ -101,6 +113,14 @@ const App: React.FC = () => {
       ...prev,
       [id]: answer
     }));
+  };
+
+  const toggleFavorite = (id: string) => {
+    setFavorites(prev => 
+      prev.includes(id) 
+        ? prev.filter(fid => fid !== id) 
+        : [...prev, id]
+    );
   };
 
   const isCurrentPageRevealed = !!pageResultsRevealed[currentPage];
@@ -121,13 +141,41 @@ const App: React.FC = () => {
     }
   };
 
-  // Calculate current page score
+  const handleJumpToQuestion = (id: string) => {
+    // 1. If searching, clear search to ensure question is visible in pagination
+    if (searchQuery) {
+      setSearchQuery('');
+    }
+
+    // 2. Find index in the full data (since search is cleared)
+    // Note: We use setTimeout to allow state update (search clearing) to propagate if needed,
+    // though setState is batched. If we clear search, `filteredData` becomes `data`.
+    // We can calculate target page based on global data index.
+    
+    const index = data.findIndex(q => q.id === id);
+    if (index !== -1) {
+      const targetPage = Math.floor(index / PAGE_SIZE) + 1;
+      
+      // If we are already on the page, just scroll. If not, switch page then scroll.
+      if (targetPage !== currentPage) {
+        setCurrentPage(targetPage);
+        // We need to wait for render
+        setTimeout(() => {
+          const el = document.getElementById(`q-${id}`);
+          el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+      } else {
+        const el = document.getElementById(`q-${id}`);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
+
   const pageScore = useMemo(() => {
     if (!isCurrentPageRevealed) return null;
     let correct = 0;
     currentQuestions.forEach(q => {
       const u = userAnswers[q.id] || [];
-      // Simple array equality check after sort
       const normalize = (arr: string[]) => [...arr].sort().join(',');
       if (normalize(u) === normalize(q.answer)) {
         correct++;
@@ -214,11 +262,14 @@ const App: React.FC = () => {
             
             <button 
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className="lg:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg"
+              className="lg:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg relative"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
               </svg>
+              {favorites.length > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-yellow-400 rounded-full"></span>
+              )}
             </button>
           </div>
         </div>
@@ -264,6 +315,8 @@ const App: React.FC = () => {
                   userAnswer={userAnswers[q.id] || []}
                   onAnswerChange={handleAnswerChange}
                   showResultMode={isCurrentPageRevealed}
+                  isFavorite={favorites.includes(q.id)}
+                  onToggleFavorite={toggleFavorite}
                 />
               ))}
             </>
@@ -273,12 +326,15 @@ const App: React.FC = () => {
         {/* Sidebar Navigation */}
         <Sidebar
           questions={currentQuestions}
+          allQuestions={data}
           userAnswers={userAnswers}
+          favorites={favorites}
           isPageRevealed={isCurrentPageRevealed}
           currentPage={currentPage}
           pageSize={PAGE_SIZE}
           isOpen={isSidebarOpen}
           setIsOpen={setIsSidebarOpen}
+          onJumpToQuestion={handleJumpToQuestion}
         />
       </div>
 
