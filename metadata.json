@@ -1,0 +1,5 @@
+{
+  "name": "ACP Exam",
+  "description": "A comprehensive exam application for AI knowledge assessment with single and multiple-choice questions, pagination, and instant feedback.",
+  "requestFramePermissions": []
+}
