@@ -10,11 +10,46 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [currentPage, setCurrentPage] = useState(1);
-  const [userAnswers, setUserAnswers] = useState<UserAnswers>({});
-  const [pageResultsRevealed, setPageResultsRevealed] = useState<Record<number, boolean>>({});
+  // Initialize Page from LocalStorage
+  const [currentPage, setCurrentPage] = useState(() => {
+    try {
+      const saved = localStorage.getItem('exam_current_page');
+      return saved ? parseInt(saved, 10) : 1;
+    } catch (e) {
+      return 1;
+    }
+  });
+
+  // Initialize Answers from LocalStorage
+  const [userAnswers, setUserAnswers] = useState<UserAnswers>(() => {
+    try {
+      const saved = localStorage.getItem('exam_user_answers');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      console.error("Failed to load user answers", e);
+      return {};
+    }
+  });
+
+  // Track which questions have been "revealed" (Check Answer clicked)
+  // Initialize with all questions that have answers, to support "Refresh -> Show Answer" behavior.
+  const [revealedQuestions, setRevealedQuestions] = useState<Set<string>>(() => {
+    try {
+      // If we are loading from storage, we assume "history" implies revealed for those answered.
+      const savedAnswers = localStorage.getItem('exam_user_answers');
+      if (savedAnswers) {
+        const parsed = JSON.parse(savedAnswers);
+        return new Set(Object.keys(parsed));
+      }
+      return new Set();
+    } catch (e) {
+      return new Set();
+    }
+  });
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isFavoritesMode, setIsFavoritesMode] = useState(false);
   
   // Favorites State with persistence
   const [favorites, setFavorites] = useState<string[]>(() => {
@@ -27,9 +62,18 @@ const App: React.FC = () => {
     }
   });
 
+  // Persistence Effects
   useEffect(() => {
     localStorage.setItem('exam_favorites', JSON.stringify(favorites));
   }, [favorites]);
+
+  useEffect(() => {
+    localStorage.setItem('exam_user_answers', JSON.stringify(userAnswers));
+  }, [userAnswers]);
+
+  useEffect(() => {
+    localStorage.setItem('exam_current_page', currentPage.toString());
+  }, [currentPage]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -39,33 +83,17 @@ const App: React.FC = () => {
           fetch('./data2.json')
         ]);
 
-        if (!res1.ok) throw new Error(`Failed to load data.json: ${res1.status}`);
-        
-        let d1 = [], d2 = [];
-        try {
-          d1 = await res1.json();
-        } catch (e) {
-          console.error("Error parsing data.json", e);
-          throw new Error("Invalid JSON in data.json");
-        }
+        if (!res1.ok) throw new Error(`Failed to load data.json: ${res1.status} ${res1.statusText}`);
+        if (!res2.ok) throw new Error(`Failed to load data2.json: ${res2.status} ${res2.statusText}`);
 
-        if (res2.ok) {
-          try {
-            d2 = await res2.json();
-          } catch (e) {
-            console.error("Error parsing data2.json", e);
-            // We can choose to fail or continue. Let's fail to ensure data integrity.
-            throw new Error("Invalid JSON in data2.json");
-          }
-        } else {
-          console.warn(`data2.json not found (${res2.status}), skipping.`);
-        }
+        const d1 = await res1.json();
+        const d2 = await res2.json();
         
         setData([...d1, ...d2]);
         setIsLoading(false);
       } catch (err: any) {
         console.error("Error loading data:", err);
-        setError(err.message || "An unknown error occurred");
+        setError(err.message || "Failed to load question data. Please ensure data.json and data2.json exist.");
         setIsLoading(false);
       }
     };
@@ -73,21 +101,33 @@ const App: React.FC = () => {
     loadData();
   }, []);
 
-  // Search Logic
+  // Filter Logic (Search + Favorites)
   const filteredData = useMemo(() => {
-    if (!searchQuery.trim()) return data;
-    const lowerQuery = searchQuery.toLowerCase();
-    return data.filter(q =>
-      q.question.toLowerCase().includes(lowerQuery) ||
-      q.options.some(opt => opt.toLowerCase().includes(lowerQuery))
-    );
-  }, [data, searchQuery]);
+    let result = data;
 
-  // Reset page logic when search changes
+    // 1. Filter by Favorites Mode
+    if (isFavoritesMode) {
+      result = result.filter(q => favorites.includes(q.id));
+    }
+
+    // 2. Filter by Search Query
+    if (searchQuery.trim()) {
+      const lowerQuery = searchQuery.toLowerCase();
+      result = result.filter(q =>
+        q.question.toLowerCase().includes(lowerQuery) ||
+        q.options.some(opt => opt.toLowerCase().includes(lowerQuery))
+      );
+    }
+
+    return result;
+  }, [data, searchQuery, isFavoritesMode, favorites]);
+
+  // Reset page logic when search or mode changes
   useEffect(() => {
-    setCurrentPage(1);
-    setPageResultsRevealed({});
-  }, [searchQuery]);
+    if (searchQuery || isFavoritesMode) {
+      setCurrentPage(1);
+    }
+  }, [searchQuery, isFavoritesMode]);
 
   const totalQuestions = filteredData.length;
   const totalPages = Math.max(1, Math.ceil(totalQuestions / PAGE_SIZE));
@@ -113,6 +153,25 @@ const App: React.FC = () => {
       ...prev,
       [id]: answer
     }));
+    // Note: We DO NOT auto-reveal here. The user must click "Check Answer".
+  };
+
+  const handleToggleReveal = (id: string) => {
+    setRevealedQuestions(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        // Option to hide answer? The UI doesn't really support "hiding" once shown easily,
+        // but let's allow toggle for flexibility.
+        // next.delete(id); 
+        // Actually, usually "Check Answer" is a one-way reveal in this context until reset.
+        // But for toggle button, adding is sufficient.
+        // If we want to allow re-hiding, we can delete. 
+        // Let's assume "Show" means show.
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
   const toggleFavorite = (id: string) => {
@@ -123,18 +182,6 @@ const App: React.FC = () => {
     );
   };
 
-  const isCurrentPageRevealed = !!pageResultsRevealed[currentPage];
-
-  const handleSubmitPage = () => {
-    if (window.confirm("确定要提交本页并查看结果吗？")) {
-      setPageResultsRevealed(prev => ({
-        ...prev,
-        [currentPage]: true
-      }));
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-  };
-
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
       setCurrentPage(newPage);
@@ -142,47 +189,32 @@ const App: React.FC = () => {
   };
 
   const handleJumpToQuestion = (id: string) => {
-    // 1. If searching, clear search to ensure question is visible in pagination
-    if (searchQuery) {
-      setSearchQuery('');
+    if (searchQuery) setSearchQuery('');
+    if (isFavoritesMode && !favorites.includes(id)) {
+        setIsFavoritesMode(false);
     }
+    setIsFavoritesMode(false); 
 
-    // 2. Find index in the full data (since search is cleared)
-    // Note: We use setTimeout to allow state update (search clearing) to propagate if needed,
-    // though setState is batched. If we clear search, `filteredData` becomes `data`.
-    // We can calculate target page based on global data index.
-    
-    const index = data.findIndex(q => q.id === id);
-    if (index !== -1) {
-      const targetPage = Math.floor(index / PAGE_SIZE) + 1;
-      
-      // If we are already on the page, just scroll. If not, switch page then scroll.
-      if (targetPage !== currentPage) {
+    setTimeout(() => {
+      const index = data.findIndex(q => q.id === id);
+      if (index !== -1) {
+        const targetPage = Math.floor(index / PAGE_SIZE) + 1;
         setCurrentPage(targetPage);
-        // We need to wait for render
         setTimeout(() => {
           const el = document.getElementById(`q-${id}`);
           el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 100);
-      } else {
-        const el = document.getElementById(`q-${id}`);
-        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-    }
+    }, 50);
   };
 
-  const pageScore = useMemo(() => {
-    if (!isCurrentPageRevealed) return null;
-    let correct = 0;
-    currentQuestions.forEach(q => {
-      const u = userAnswers[q.id] || [];
-      const normalize = (arr: string[]) => [...arr].sort().join(',');
-      if (normalize(u) === normalize(q.answer)) {
-        correct++;
-      }
-    });
-    return { correct, total: currentQuestions.length };
-  }, [isCurrentPageRevealed, currentQuestions, userAnswers]);
+  const handleResetProgress = () => {
+    if (window.confirm("确定要清空所有答题记录吗？此操作无法撤销。")) {
+      setUserAnswers({});
+      setRevealedQuestions(new Set());
+      localStorage.removeItem('exam_user_answers');
+    }
+  };
 
   if (isLoading) {
     return (
@@ -234,29 +266,49 @@ const App: React.FC = () => {
             </span>
           </div>
 
-          {/* Search Bar */}
-          <div className="flex-1 max-w-md relative">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
+          {/* Search Bar & Filters */}
+          <div className="flex-1 max-w-md flex items-center gap-2">
+            <div className="relative flex-grow">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <input
+                type="text"
+                placeholder="搜索题目关键词..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="block w-full pl-10 pr-3 py-1.5 sm:py-2 border border-slate-200 rounded-full leading-5 bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-all shadow-sm focus:shadow-md"
+              />
             </div>
-            <input
-              type="text"
-              placeholder="搜索题目关键词..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="block w-full pl-10 pr-3 py-1.5 sm:py-2 border border-slate-200 rounded-full leading-5 bg-slate-50 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-all shadow-sm focus:shadow-md"
-            />
+            
+            <button
+              onClick={() => setIsFavoritesMode(!isFavoritesMode)}
+              title={isFavoritesMode ? "显示全部" : "只看收藏"}
+              className={`p-2 sm:px-3 sm:py-2 rounded-full border transition-all flex items-center gap-1.5 flex-shrink-0 ${
+                isFavoritesMode
+                  ? 'bg-yellow-50 border-yellow-400 text-yellow-700 shadow-sm'
+                  : 'bg-white border-slate-200 text-slate-500 hover:border-blue-300 hover:text-blue-600'
+              }`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 ${isFavoritesMode ? "fill-current" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+              </svg>
+              <span className="hidden sm:inline text-sm font-medium">我的收藏</span>
+            </button>
           </div>
 
           <div className="flex items-center gap-4 flex-shrink-0">
-            <div className="hidden md:flex flex-col items-end mr-2">
-              <div className="text-xs text-slate-500 mb-1">
-                {searchQuery ? `找到 ${totalQuestions} 题` : `总进度 ${progress.toFixed(0)}%`}
+            <div className="hidden md:flex flex-col items-end mr-2 cursor-pointer group" title="点击重置进度" onClick={handleResetProgress}>
+              <div className="text-xs text-slate-500 mb-1 group-hover:text-red-500 transition-colors">
+                {isFavoritesMode 
+                  ? `收藏 ${filteredData.length} / ${favorites.length}` 
+                  : `总进度 ${progress.toFixed(0)}%`
+                }
               </div>
               <div className="w-32 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-blue-600 rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                <div className="h-full bg-blue-600 rounded-full transition-all duration-500 group-hover:bg-red-500" style={{ width: `${progress}%` }}></div>
               </div>
             </div>
             
@@ -282,31 +334,25 @@ const App: React.FC = () => {
           {filteredData.length === 0 ? (
             <div className="text-center py-20">
               <div className="bg-slate-100 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+                {isFavoritesMode ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                )}
               </div>
-              <h3 className="text-xl font-bold text-slate-800 mb-2">未找到相关题目</h3>
-              <p className="text-slate-500">尝试更换关键词搜索</p>
+              <h3 className="text-xl font-bold text-slate-800 mb-2">
+                {isFavoritesMode ? "暂无收藏内容" : "未找到相关题目"}
+              </h3>
+              <p className="text-slate-500">
+                {isFavoritesMode ? "点击题目右上角的星号即可收藏" : "尝试更换关键词搜索"}
+              </p>
             </div>
           ) : (
             <>
-              {/* Page Score Card */}
-              {pageScore && (
-                <div className="mb-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-6 text-white shadow-lg animate-in slide-in-from-top-4 duration-500">
-                  <div className="flex justify-between items-end">
-                    <div>
-                      <h2 className="text-2xl font-bold mb-1">本页结果统计</h2>
-                      <p className="text-blue-100 opacity-90 text-sm">不错！继续保持学习。</p>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-4xl font-bold">{pageScore.correct} <span className="text-xl opacity-60">/ {pageScore.total}</span></div>
-                      <div className="text-xs font-medium uppercase tracking-widest opacity-75 mt-1">正确率: {Math.round((pageScore.correct / pageScore.total) * 100)}%</div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {currentQuestions.map((q, idx) => (
                 <QuestionCard
                   key={q.id}
@@ -314,9 +360,10 @@ const App: React.FC = () => {
                   data={q}
                   userAnswer={userAnswers[q.id] || []}
                   onAnswerChange={handleAnswerChange}
-                  showResultMode={isCurrentPageRevealed}
                   isFavorite={favorites.includes(q.id)}
                   onToggleFavorite={toggleFavorite}
+                  isRevealed={revealedQuestions.has(q.id)}
+                  onToggleReveal={handleToggleReveal}
                 />
               ))}
             </>
@@ -329,7 +376,7 @@ const App: React.FC = () => {
           allQuestions={data}
           userAnswers={userAnswers}
           favorites={favorites}
-          isPageRevealed={isCurrentPageRevealed}
+          revealedQuestions={revealedQuestions}
           currentPage={currentPage}
           pageSize={PAGE_SIZE}
           isOpen={isSidebarOpen}
@@ -353,18 +400,9 @@ const App: React.FC = () => {
               上一页
             </button>
 
-            {!isCurrentPageRevealed ? (
-              <button
-                onClick={handleSubmitPage}
-                className="flex-grow sm:flex-grow-0 px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 hover:bg-blue-700 hover:shadow-blue-300 hover:-translate-y-0.5 active:translate-y-0 transition-all"
-              >
-                提交本页
-              </button>
-            ) : (
-              <div className="flex-grow sm:flex-grow-0 px-6 py-2 bg-slate-100 text-slate-500 font-medium rounded-xl text-center border border-slate-200">
-                已完成
-              </div>
-            )}
+            <div className="text-slate-500 text-sm font-medium">
+              第 {currentPage} 页 / 共 {totalPages} 页
+            </div>
 
             <button
               onClick={() => handlePageChange(currentPage + 1)}

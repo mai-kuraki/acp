@@ -14,9 +14,10 @@ export interface QuestionProps {
   index: number;
   userAnswer: string[];
   onAnswerChange: (id: string, answer: string[]) => void;
-  showResultMode: boolean;
   isFavorite: boolean;
   onToggleFavorite: (id: string) => void;
+  isRevealed: boolean;
+  onToggleReveal: (id: string) => void;
 }
 
 export interface SidebarProps {
@@ -24,7 +25,7 @@ export interface SidebarProps {
   allQuestions: Question[]; // All questions for favorites lookup
   userAnswers: UserAnswers;
   favorites: string[];
-  isPageRevealed: boolean;
+  revealedQuestions: Set<string>;
   currentPage: number;
   pageSize: number;
   isOpen: boolean;

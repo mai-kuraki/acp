@@ -6,7 +6,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   allQuestions, // all questions for favorites lookup
   userAnswers, 
   favorites,
-  isPageRevealed, 
+  revealedQuestions,
   currentPage, 
   pageSize,
   isOpen,
@@ -26,40 +26,48 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const getStatusColor = (q: Question) => {
     const hasAnswered = userAnswers[q.id] && userAnswers[q.id].length > 0;
+    const isRevealed = revealedQuestions.has(q.id);
+
+    if (!hasAnswered) return 'text-slate-400 bg-slate-50 border-slate-200';
+
+    // Answered, but NOT revealed -> Neutral "Answered" state (Blue)
+    if (!isRevealed) {
+      return 'text-blue-600 bg-blue-50 border-blue-200';
+    }
+
+    // Answered AND Revealed -> Show Result (Green/Red)
     const normalize = (arr: string[]) => [...(arr || [])].sort().join(',');
     const isCorrect = normalize(userAnswers[q.id] || []) === normalize(q.answer);
 
-    // Using simple status for the list view
-    if (hasAnswered) {
-      // We can show correctness if answered, even if page not revealed, or keep it hidden.
-      // Usually "Favorites" implies review, so showing status is helpful.
-      // However, if the main app logic hides answers, we might want to respect that.
-      // For now, let's just show answered/unanswered color unless checking results.
-      
-      // Let's stick to consistent coloring with the grid.
-      // If we want to reveal correctness immediately in Favorites list:
-      // if (isCorrect) return 'text-green-600 bg-green-50 border-green-200';
-      // return 'text-red-600 bg-red-50 border-red-200';
-      
-      return 'text-blue-600 bg-blue-50 border-blue-200';
+    if (isCorrect) {
+      return 'text-green-600 bg-green-50 border-green-200';
+    } else {
+      return 'text-red-600 bg-red-50 border-red-200';
     }
-    return 'text-slate-400 bg-slate-50 border-slate-200';
   };
 
   const getButtonClass = (q: Question) => {
     const hasAnswered = userAnswers[q.id] && userAnswers[q.id].length > 0;
-    const normalize = (arr: string[]) => [...(arr || [])].sort().join(',');
-    const isCorrect = normalize(userAnswers[q.id] || []) === normalize(q.answer);
-
+    const isRevealed = revealedQuestions.has(q.id);
     const base = "w-10 h-10 rounded-lg text-sm font-medium flex items-center justify-center transition-all border ";
 
-    if (isPageRevealed) {
-      if (isCorrect) return base + "bg-green-100 text-green-700 border-green-200 hover:bg-green-200";
-      if (hasAnswered) return base + "bg-red-100 text-red-700 border-red-200 hover:bg-red-200";
-      return base + "bg-slate-50 text-slate-400 border-slate-200";
-    }
+    if (hasAnswered) {
+      if (!isRevealed) {
+        // Just Answered
+        return base + "bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-200";
+      }
 
-    if (hasAnswered) return base + "bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-200";
+      // Answered & Revealed
+      const normalize = (arr: string[]) => [...(arr || [])].sort().join(',');
+      const isCorrect = normalize(userAnswers[q.id] || []) === normalize(q.answer);
+      
+      if (isCorrect) {
+        return base + "bg-green-500 text-white border-green-500 shadow-md shadow-green-200";
+      } else {
+        return base + "bg-red-500 text-white border-red-500 shadow-md shadow-red-200";
+      }
+    }
+    // Unanswered
     return base + "bg-white text-slate-600 border-slate-200 hover:border-blue-400 hover:text-blue-600";
   };
 
@@ -138,18 +146,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                     <div className="w-6 h-6 rounded border border-blue-600 bg-blue-600"></div>
                     <span>已作答</span>
                   </div>
-                  {isPageRevealed && (
-                    <>
-                      <div className="flex items-center gap-3">
-                        <div className="w-6 h-6 rounded border border-green-200 bg-green-100"></div>
-                        <span>正确</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="w-6 h-6 rounded border border-red-200 bg-red-100"></div>
-                        <span>错误</span>
-                      </div>
-                    </>
-                  )}
+                  <div className="flex items-center gap-3">
+                    <div className="w-6 h-6 rounded border border-green-500 bg-green-500"></div>
+                    <span>正确</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-6 h-6 rounded border border-red-500 bg-red-500"></div>
+                    <span>错误</span>
+                  </div>
                 </div>
               </div>
             </>
@@ -165,8 +169,37 @@ const Sidebar: React.FC<SidebarProps> = ({
               ) : (
                 favoriteQuestions.map((q, idx) => {
                   const globalIndex = allQuestions.findIndex(aq => aq.id === q.id);
-                  const statusClass = getStatusColor(q);
+                  const isRevealed = revealedQuestions.has(q.id);
+                  const hasAnswered = userAnswers[q.id]?.length > 0;
                   
+                  // For favorites list, maybe we should always show the status?
+                  // Or stick to the same "reveal" logic?
+                  // Usually favorites list implies review, so showing status is helpful.
+                  // But to be consistent with the Sidebar Grid logic above:
+                  // Let's reuse getStatusColor logic which now respects `isRevealed`.
+                  // BUT, `getStatusColor` returns Tailwind classes.
+                  // Let's assume for Favorites List, we want to know if it's correct/wrong/answered.
+                  
+                  // Actually, let's keep it simple: If answered, show "Answered". 
+                  // If revealed, show "Correct/Wrong".
+                  
+                  let badgeText = '未答';
+                  let badgeClass = 'text-slate-400 bg-slate-50 border-slate-200';
+                  
+                  if (hasAnswered) {
+                    if (isRevealed) {
+                        const normalize = (arr: string[]) => [...(arr || [])].sort().join(',');
+                        const isCorrect = normalize(userAnswers[q.id] || []) === normalize(q.answer);
+                        badgeText = isCorrect ? '正确' : '错误';
+                        badgeClass = isCorrect 
+                            ? 'text-green-600 bg-green-50 border-green-200' 
+                            : 'text-red-600 bg-red-50 border-red-200';
+                    } else {
+                        badgeText = '已答';
+                        badgeClass = 'text-blue-600 bg-blue-50 border-blue-200';
+                    }
+                  }
+
                   return (
                     <button
                       key={q.id}
@@ -180,8 +213,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <span className="text-xs font-bold text-slate-400 group-hover:text-blue-500">
                           #{globalIndex + 1}
                         </span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${statusClass}`}>
-                          {userAnswers[q.id]?.length > 0 ? '已答' : '未答'}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${badgeClass}`}>
+                          {badgeText}
                         </span>
                       </div>
                       <p className="text-sm text-slate-700 line-clamp-2 leading-snug">
